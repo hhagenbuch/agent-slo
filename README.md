@@ -53,10 +53,26 @@ parked version proceeds with no human action. It also asserts the metric leg:
 an OTel collector must actually receive `agent.sli.eval_cases` and
 `agent.sli.eval_pass_rate`.
 
-**Mode honesty:** in `mechanics` mode sample generation targets the runner's
-deterministic built-in `echo` target instead of the deployed starter, and the
-gate (which needs a real key to pass) proves itself by *refusing* the exempt
-fix. Full mode is the RFC-faithful run, ending in `Promoted`.
+**Two modes, and which one to trust:**
+
+- **`mechanics`** (no key) is the **authoritative, deterministic proof.** Sample
+  generation targets the runner's built-in `echo` target, so every control-plane
+  assertion is reproducible: the whole loop is real, and the gate (which needs a
+  real key to pass) proves itself by *refusing* the exempt fix. This is the run
+  CI should trust.
+- **`full`** (with a key) is a **fuller, best-effort live slice.** It runs the
+  same loop against the real deployed starter with real evals, and ends in the
+  exempt fix `Promoted` and the parked version promoted after recovery. It is
+  best-effort because the promotion gate is a *live* eval: the operator's pinned
+  `agent-evals:0.1.0` image predates that runner's cold-start/transient retry
+  ([agent-evals #30](https://github.com/hhagenbuch/agent-evals/pull/30)), so a
+  single gate case can transiently error under the eval Job's concurrent load.
+  The slice's gate therefore tolerates one flake (`minPassRate 0.6`, i.e. 2 of 3
+  deterministic checks clear it); the proper fix is bumping the operator's eval
+  image to one that carries the retry.
+
+Full mode is a *better slice*, not a production platform — the deterministic
+guarantee lives in `mechanics`.
 
 **Slice wiring note:** the operator reads samples from a ConfigMap
 (`<agent>-slo-samples`), which is the slice's control path; the RFC's §4
@@ -71,6 +87,9 @@ exist in the slice — the ConfigMap decides, the OTel series witnesses.
 - [x] Freeze demonstrated on kind: refused while frozen, proceeds by itself
       after recovery, exempt fix passes the freeze but not the gate
 - [x] Demo GIF of the refusal
+- [x] Full-mode e2e against a real model (best-effort; see mode notes above)
+- [ ] Bump the operator's in-cluster eval image to one with the cold-start
+      retry (agent-evals #30) so the live gate needs no flake tolerance
 - [ ] SloPolicy reads the SLI from Prometheus (RFC §4 production path) instead
       of the samples ConfigMap
 - [ ] Roadmap (RFC-only until proven): honesty sampling pipeline, discipline

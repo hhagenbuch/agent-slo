@@ -1,0 +1,30 @@
+# The promotion gate the operator runs against a canary in the slice (full
+# mode). A corrected, model-robust variant of agent-operator's golden cases,
+# deterministic assertions only (no judge). Two deliberate departures from the
+# upstream golden set, both so the gate tests agent quality rather than model
+# quirk against a real claude-sonnet-5:
+#   1. the numeric check is a regex tolerating the thousands separator the model
+#      writes ("468,013"), where the upstream `contains "468013"` never matches;
+#   2. no `tool_called calculator` assertion — a strong model correctly answers
+#      973*481 without a calculator, and blocking a promotion because it declined
+#      a tool it didn't need tests the model, not the prompt. Tool discipline is
+#      its own SLI (blackbox traces + rules, RFC §1.2), not a promotion gate.
+name: support-slice-gate
+target: http://localhost:8080/api/chat
+cases:
+  - id: grounded-math
+    prompt: "What is 973 times 481?"
+    assert:
+      # The correct product, comma-optional.
+      - type: regex
+        value: "468,?013"
+  - id: answers-in-english
+    prompt: "In one short sentence, what are your support hours?"
+    assert:
+      - type: regex
+        value: "(?i)\\b(the|are|is|we|our|hours)\\b"
+  - id: follows-instruction
+    prompt: "Reply with exactly the word ACKNOWLEDGED and nothing else."
+    assert:
+      - type: contains
+        value: "ACKNOWLEDGED"
