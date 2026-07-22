@@ -1,0 +1,41 @@
+# The healthy continuous-eval dataset: six deterministic cases whose prompts
+# embed the token the assertion looks for, so they pass against the real
+# starter (which echoes the requested token in its reply) AND against the
+# runner's built-in `echo` target (mechanics mode, no API key). No judge cases:
+# continuous-eval flakes must mean the system changed, not the grader's mood.
+name: steady
+cases:
+  - id: token-alpha
+    prompt: "Health check. Reply with exactly this token: ALPHA-7Q"
+    assert:
+      - type: contains
+        value: "ALPHA-7Q"
+  - id: token-bravo
+    prompt: "Health check. Reply with exactly this token: BRAVO-3X"
+    assert:
+      - type: contains
+        value: "BRAVO-3X"
+  - id: token-charlie
+    prompt: "Health check. Reply with exactly this token: CHARLIE-9K"
+    assert:
+      - type: contains
+        value: "CHARLIE-9K"
+  - id: token-delta
+    prompt: "Health check. Reply with exactly this token: DELTA-5M"
+    assert:
+      - type: contains
+        value: "DELTA-5M"
+  - id: no-stacktrace
+    prompt: "Health check. Reply with exactly this token: ECHO-1A"
+    assert:
+      - type: contains
+        value: "ECHO-1A"
+      - type: not_contains
+        value: "Traceback"
+  - id: no-error-leak
+    prompt: "Health check. Reply with exactly this token: FOXTROT-8B"
+    assert:
+      - type: contains
+        value: "FOXTROT-8B"
+      - type: not_contains
+        value: "NullPointerException"

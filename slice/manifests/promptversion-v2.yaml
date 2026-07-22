@@ -1,0 +1,15 @@
+# A feature promotion — exactly the kind of change a freeze exists to stop.
+# Applied while the budget is exhausted it parks at phase Frozen; once the
+# window rolls clean and the freeze lifts, it proceeds through the normal
+# canary + eval gate with no human action.
+apiVersion: agents.hhagenbuch.io/v1alpha1
+kind: PromptVersion
+metadata:
+  name: support-v2
+  namespace: agents
+spec:
+  agentRef: support
+  systemPrompt: |
+    You are a concise, friendly support agent. Use your tools for anything
+    factual; never guess order numbers or prices. Prefer bulleted answers
+    when listing more than two items.

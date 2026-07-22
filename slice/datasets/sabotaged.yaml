@@ -1,0 +1,38 @@
+# The degraded continuous-eval dataset: four healthy cases plus two whose
+# assertions cannot be satisfied by any reply (the asserted token never appears
+# in the prompt, and no honest target invents it). Every run therefore scores
+# exactly 4/6 — a deterministic 0.667 pass rate, far below the 0.95 target —
+# regardless of target or model. This is how the e2e drives the budget to
+# exhaustion without depending on a model actually misbehaving on cue.
+name: sabotaged
+cases:
+  - id: token-alpha
+    prompt: "Health check. Reply with exactly this token: ALPHA-7Q"
+    assert:
+      - type: contains
+        value: "ALPHA-7Q"
+  - id: token-bravo
+    prompt: "Health check. Reply with exactly this token: BRAVO-3X"
+    assert:
+      - type: contains
+        value: "BRAVO-3X"
+  - id: token-charlie
+    prompt: "Health check. Reply with exactly this token: CHARLIE-9K"
+    assert:
+      - type: contains
+        value: "CHARLIE-9K"
+  - id: token-delta
+    prompt: "Health check. Reply with exactly this token: DELTA-5M"
+    assert:
+      - type: contains
+        value: "DELTA-5M"
+  - id: regression-one
+    prompt: "Health check. Reply with exactly this token: GOLF-2C"
+    assert:
+      - type: contains
+        value: "XYZZY-NEVER-SAID-4F"
+  - id: regression-two
+    prompt: "Health check. Reply with exactly this token: HOTEL-6D"
+    assert:
+      - type: contains
+        value: "XYZZY-NEVER-SAID-7G"

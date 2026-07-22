@@ -1,0 +1,16 @@
+# Minimal collector for the e2e's metric-leg assertion: receive OTLP, print
+# every metric to stdout so `docker logs` can prove agent.sli.* arrived.
+# (Production wiring — Prometheus etc. — is the agent-meter demo stack's job.)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]
