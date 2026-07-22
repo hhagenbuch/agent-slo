@@ -67,9 +67,9 @@ an OTel collector must actually receive `agent.sli.eval_cases` and
   `agent-evals:0.1.0` image predates that runner's cold-start/transient retry
   ([agent-evals #30](https://github.com/hhagenbuch/agent-evals/pull/30)), so a
   single gate case can transiently error under the eval Job's concurrent load.
-  The slice's gate therefore tolerates one flake (`minPassRate 0.67`, 2 of 3
-  deterministic checks); the proper fix is bumping the operator's eval image to
-  one that carries the retry.
+  The slice's gate therefore tolerates one flake (`minPassRate 0.6`, i.e. 2 of 3
+  deterministic checks clear it); the proper fix is bumping the operator's eval
+  image to one that carries the retry.
 
 Full mode is a *better slice*, not a production platform — the deterministic
 guarantee lives in `mechanics`.
