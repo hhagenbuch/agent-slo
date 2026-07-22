@@ -33,7 +33,9 @@ METER_DIR=${METER_DIR:-$ROOT/../agent-meter}
 CLUSTER=${CLUSTER:-agent-slo-e2e}
 NS=agents
 STARTER_IMAGE=ghcr.io/hhagenbuch/spring-ai-agent-starter:0.3.0
-EVALS_IMAGE=ghcr.io/hhagenbuch/agent-evals:0.1.0
+# Must match the operator's DEFAULT_EVALS_IMAGE: the gate Job pulls this tag.
+# 0.2.1 carries the cold-start retry, so the live gate needs no flake tolerance.
+EVALS_IMAGE=ghcr.io/hhagenbuch/agent-evals:0.2.1
 COLLECTOR=agent-slo-otel
 
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
@@ -102,7 +104,11 @@ EVALS_JAR=$(ls "$EVALS_DIR"/target/agent-evals-*.jar | head -1)
 (cd "$METER_DIR" && ./mvnw -q -DskipTests -pl meter-core,meter-spring -am install)
 (cd "$ROOT" && mvn -q -DskipTests -f slo-metrics/pom.xml package)
 METRICS_JAR=$(ls "$ROOT"/slo-metrics/target/slo-metrics-*.jar | head -1)
-docker image inspect "$EVALS_IMAGE" >/dev/null 2>&1 || docker build -q -t "$EVALS_IMAGE" "$EVALS_DIR"
+# Prefer the published tag (what the operator default points at); fall back to
+# building from the sibling checkout only if it can't be pulled.
+docker image inspect "$EVALS_IMAGE" >/dev/null 2>&1 \
+  || docker pull -q "$EVALS_IMAGE" >/dev/null 2>&1 \
+  || docker build -q -t "$EVALS_IMAGE" "$EVALS_DIR"
 docker image inspect "$STARTER_IMAGE" >/dev/null 2>&1 || \
   (cd "$STARTER_DIR" && mvn -q -DskipTests spring-boot:build-image \
      -Dspring-boot.build-image.imageName="$STARTER_IMAGE")
