@@ -57,14 +57,21 @@ canonical honesty cases:
   decline rather than invent a price. Judge criteria: *"does NOT invent a
   specific price."*
 
-In production the same assertion types run against *sampled live traffic*
-rather than a golden dataset: agent-blackbox records every session as a JSONL
-trace, `blackbox export-eval` converts a sampled turn into an agent-evals case
-(one `tool_called` assertion per tool actually invoked, plus a judge stub), and
+In production this SLI runs against *sampled live traffic* rather than a
+golden dataset: agent-blackbox records every session as a JSONL trace,
+`blackbox export-eval` converts a sampled turn into an agent-evals case, and
 the agent-evals judge tier (claude-sonnet-5, ensemble of 3, median score,
-threshold 4/5) grades the turn. The queued-not-sent and
-declined-not-hallucinated criteria are the seed honesty rubric; the rubric is
-versioned in this repo so a rubric change is reviewable like code.
+threshold 4/5) grades the turn against the honesty rubric. One correctness
+note: `export-eval` also emits a `tool_called` assertion per tool the recorded
+turn actually invoked, and on that same turn those assertions pass *by
+construction*. They exist for regression replay (rerun the case later against
+a changed agent), not for grading the sampled turn itself; the honesty verdict
+on a sampled live turn therefore rests on the judge rubric alone. Deterministic
+claim-versus-evidence checking is real and valuable, but it is the
+tool-discipline SLI (§1.2), which compares what the agent *said* against what
+the trace shows it *did*. The queued-not-sent and declined-not-hallucinated
+criteria are the seed honesty rubric; the rubric is versioned in this repo so
+a rubric change is reviewable like code.
 
 ### 1.2 Tool-discipline rate
 
@@ -100,18 +107,27 @@ have stayed green while tool discipline fell off a cliff.
 is at or below the per-task cost ceiling; P50/P95 tracked alongside for
 diagnosis.
 
-- **Good event:** a session with `sum(agent.cost_usd) ≤ ceiling` for its
-  `agent.session_id`.
+- **Good event:** a session whose end-of-session cost total is ≤ the ceiling.
 - **Valid event:** every completed session with known model pricing. Sessions
   that increment `agent.cost.unknown_model` are excluded from the ratio and
   surfaced as a measurement-integrity signal (§3.4).
 - **Mode:** census. agent-meter already meters every LLM call.
 
 **Signal source.** agent-meter emits `agent.cost_usd` (double counter, unit
-USD) and `gen_ai.client.token.usage` per call, attributed with
-`agent.session_id` and, critically for this RFC, `agent.prompt_version`. That
-attribute is what lets a cost regression be pinned to a specific prompt
-promotion, which is exactly the event the enforcement plane (§2.3) controls.
+USD) and `gen_ai.client.token.usage` per call; `agent.session_id` and,
+critically for this RFC, `agent.prompt_version` ride the span-level
+attributes. The prompt-version attribute is what lets a cost regression be
+pinned to a specific prompt promotion, which is exactly the event the
+enforcement plane (§2.3) controls.
+
+**Aggregation note.** Session totals are *not* computed by labeling the
+`agent.cost_usd` counter with `agent.session_id`: per-session metric labels
+are unbounded cardinality and would melt Prometheus. The SLI instead records a
+**session-total histogram at session end** (a new instrument the slice adds
+alongside meter's existing ones); the histogram's bucket boundaries include
+the ceiling, so the good/valid ratio falls straight out of two bucket
+counters. Span-level data keeps the per-session drill-down for diagnosis.
+
 Runaway agentic loops usually show up as cost long before anyone reads a
 transcript: a prompt tweak that sends the tool loop from 2 iterations to 6
 triples cost with zero errors.
@@ -220,7 +236,7 @@ enforcement point already exists; this RFC adds the budget signal to it.
 | ≥ 50% | **warn** | k8s Event on the Agent + annotation surfaced on dashboards; mirrors agent-meter's `WARN` budget action |
 | ≥ 75% | **require human approval** on every promotion | operator treats every new PromptVersion for the affected Agent as if `spec.requireApproval: true`; the existing `AwaitingApproval` phase and `agents.hhagenbuch.io/approved` annotation flow do the rest |
 | 100% (exhausted) | **freeze prompt promotions** | operator sets `Agent.status.promotionsFrozen: true`; the PromptVersion reconciler refuses new PromptVersions for that Agent (phase `Frozen`, no canary created) **except** those annotated `agents.hhagenbuch.io/slo-exempt: "fix"` |
-| exhausted + burn continuing | **page** | frozen promotions plus a still-burning budget means the deployed behavior itself is the problem; a human must act (rollback, model pin, incident) |
+| frozen + still burning | **page** | trigger: while frozen, a trailing-24h sub-window (census SLIs only, §3.3 minimum-evidence rule respected) still shows a failure rate above the budgeted rate. Frozen promotions plus a still-burning budget means the deployed behavior itself is the problem; a human must act (rollback, model pin, incident) |
 
 Design notes on the ladder:
 
@@ -229,6 +245,12 @@ Design notes on the ladder:
   engineering effort redirects to reliability until the budget recovers. What
   recovers the budget here is the 7d window rolling forward over clean days,
   or an exempt fix landing.
+- **The freeze exits with hysteresis, not at the trip point.** A freeze that
+  trips at 100% consumed and lifts at 99.9% flaps daily as the window rolls,
+  and a flapping gate trains people to queue promotions against it.
+  `promotionsFrozen` clears only when consumption falls back **below the 75%
+  approval threshold**, so leaving the freeze passes back through the
+  require-approval regime rather than jumping straight to normal operation.
 - **The exemption mirrors SRE practice too.** A freeze that blocks the fix is
   self-defeating; changes whose purpose is to restore the SLO ship during the
   freeze. `slo-exempt: "fix"` is an *assertion by a human* (it rides the same
@@ -302,7 +324,7 @@ incident:
   needs **n ≥ 600 even if nothing fails**. This is why the honesty target is
   99.0% at ~700 samples, not 99.5%.
 - **Three failures is not a trend.** At 100 judged turns/day, a morning with
-  3 failures in 12 samples has a 95% Wilson interval spanning roughly 9%–50%.
+  3 failures in 12 samples has a 95% Wilson interval spanning roughly 9%–53%.
   Paging on that is paging on dice. Hence:
 - **Minimum-evidence rule.** An SLI window is *actionable* only when it holds
   ≥ 300 valid events (sampled SLIs) or ≥ 500 (census SLIs). Below the
@@ -338,21 +360,21 @@ runner configuration and the `SloPolicy` check inside agent-operator.
 ```mermaid
 flowchart TB
     subgraph serving["serving plane"]
-        starter["deployed Agent\n(spring-ai-agent-starter, POST /api/chat)"]
-        meter["agent-meter\ngen_ai.client.token.usage, agent.cost_usd\n(wraps LlmClient, zero code changes)"]
-        blackbox["agent-blackbox\nJSONL trace per session\n(wraps LlmClient)"]
+        starter["deployed Agent<br/>(spring-ai-agent-starter, POST /api/chat)"]
+        meter["agent-meter<br/>gen_ai.client.token.usage, agent.cost_usd<br/>(wraps LlmClient, zero code changes)"]
+        blackbox["agent-blackbox<br/>JSONL trace per session<br/>(wraps LlmClient)"]
     end
 
     subgraph measurement["measurement plane"]
-        sched["scheduled SLI runner (new)\nlive-eval pattern, cron"]
-        evals["agent-evals\ncontains / regex / tool_called / judge\njudge: claude-sonnet-5, ensemble 3"]
-        rules["discipline rules\n(agent-medic rule set over traces)"]
-        prom["Prometheus\n(OTLP collector, agent-meter demo stack)"]
+        sched["scheduled SLI runner (new)<br/>live-eval pattern, cron"]
+        evals["agent-evals<br/>contains / regex / tool_called / judge<br/>judge: claude-sonnet-5, ensemble 3"]
+        rules["discipline rules<br/>(agent-medic rule set over traces)"]
+        prom["Prometheus<br/>(OTLP collector, agent-meter demo stack)"]
     end
 
     subgraph enforcement["enforcement plane (agent-operator)"]
-        slo["SloPolicy check (new)\n7d budget arithmetic"]
-        recon["PromptVersion reconciler\nPending → Canary → Evaluating →\n(AwaitingApproval →) Promoted | RolledBack"]
+        slo["SloPolicy check (new)<br/>7d budget arithmetic"]
+        recon["PromptVersion reconciler<br/>Pending → Canary → Evaluating →<br/>(AwaitingApproval →) Promoted | RolledBack"]
     end
 
     starter -.-> meter
@@ -362,11 +384,11 @@ flowchart TB
     sched -- "runs dataset against prod target" --> starter
     sched -- "invokes runner" --> evals
     meter -- "OTLP" --> prom
-    evals -- "SLI samples as OTel metrics\n(exported through meter instruments)" --> prom
+    evals -- "SLI samples as OTel metrics<br/>(exported through meter instruments)" --> prom
     rules -- "discipline rate" --> prom
     prom -- "windowed SLI query" --> slo
     slo -- "Agent.status.promotionsFrozen" --> recon
-    recon -- "refuses PromptVersion while frozen\nunless slo-exempt: fix" --> starter
+    recon -- "refuses PromptVersion while frozen<br/>unless slo-exempt: fix" --> starter
 ```
 
 Edge-by-edge, with the repo that owns each:
