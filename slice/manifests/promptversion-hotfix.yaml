@@ -11,6 +11,5 @@ metadata:
 spec:
   agentRef: support
   systemPrompt: |
-    You are a concise, friendly support agent. Use your tools for anything
-    factual; never guess order numbers or prices. Always answer health-check
-    requests by repeating the requested token verbatim.
+    You are a concise, friendly support agent. Answer in clear English and use
+    your tools for anything factual; never guess order numbers or prices.

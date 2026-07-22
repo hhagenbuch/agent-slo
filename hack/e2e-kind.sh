@@ -69,6 +69,32 @@ wait_for() {
   exit 1
 }
 
+# Full mode targets the deployed starter through a port-forward. A promotion
+# rolls the main Deployment, which kills a port-forward bound to the old pod, so
+# the forward is (re)established lazily and health-checked before every eval run.
+PF_PID=""
+start_pf() {
+  [ "$MODE" = full ] || return 0
+  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+  kubectl -n "$NS" rollout status deploy/support --timeout=180s >/dev/null 2>&1 || true
+  kubectl -n "$NS" port-forward svc/support 18080:8080 >/dev/null 2>&1 &
+  PF_PID=$!
+  sleep 3
+}
+ensure_pf() {
+  [ "$MODE" = full ] || return 0
+  if curl -sf -o /dev/null --max-time 3 http://localhost:18080/actuator/health 2>/dev/null; then
+    return 0
+  fi
+  echo "  (port-forward stale after a rollout — refreshing)"
+  start_pf
+}
+# One continuous-eval sample, refreshing the forward first in full mode.
+sample() {
+  ensure_pf
+  "$ROOT"/slice/continuous-eval.sh "$@"
+}
+
 say "Building (operator jar, evals jar+image, meter install, slo-metrics, starter image)"
 (cd "$OPERATOR_DIR" && mvn -q -DskipTests package)
 (cd "$EVALS_DIR" && mvn -q -DskipTests package)
@@ -93,8 +119,11 @@ kubectl -n "$NS" create secret generic anthropic-key \
   --from-literal=api-key="${ANTHROPIC_API_KEY:-sk-ant-placeholder}" >/dev/null
 kubectl -n "$NS" delete configmap support-slo-samples --ignore-not-found >/dev/null
 kubectl -n "$NS" delete promptversion --all --ignore-not-found >/dev/null 2>&1 || true
-kubectl create configmap support-golden-cases -n "$NS" \
-  --from-file=dataset.yaml="$OPERATOR_DIR"/examples/golden-cases.yaml \
+# Delete the Agent too: its status.promotionsFrozen persists across runs on a
+# reused cluster, and a stale freeze would break Phase A's "not frozen" check.
+kubectl -n "$NS" delete agent --all --ignore-not-found >/dev/null 2>&1 || true
+kubectl create configmap support-slice-gate -n "$NS" \
+  --from-file=dataset.yaml="$ROOT"/slice/datasets/gate.yaml \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 say "OTel collector (docker, debug exporter — the metric-leg witness)"
@@ -114,10 +143,13 @@ kubectl apply -f "$ROOT"/slice/manifests/agent.yaml >/dev/null
 
 if [ "$MODE" = full ]; then
   say "Waiting for the deployed starter, then port-forwarding it"
-  kubectl -n "$NS" rollout status deploy/support --timeout=180s
-  kubectl -n "$NS" port-forward svc/support 18080:8080 >/dev/null 2>&1 &
-  PF_PID=$!
-  sleep 3
+  # The operator creates the Deployment asynchronously; wait for it to exist
+  # before rollout status (which errors immediately on NotFound).
+  for _ in $(seq 1 24); do
+    kubectl -n "$NS" get deploy/support >/dev/null 2>&1 && break
+    sleep 5
+  done
+  start_pf
   TARGET=http://localhost:18080/api/chat
 else
   TARGET=echo
@@ -126,7 +158,7 @@ export EVALS_JAR METRICS_JAR NS
 export SAMPLES_CM=support-slo-samples AGENT_NAME=support
 
 say "Phase A — one degraded run: below minSamples, the SLI must NOT act (RFC §3.3)"
-"$ROOT"/slice/continuous-eval.sh "$ROOT"/slice/datasets/sabotaged.yaml "$TARGET"
+sample "$ROOT"/slice/datasets/sabotaged.yaml "$TARGET"
 wait_for "sloMessage reports insufficient data on the 6 recorded events" 75 "insufficient data: 6/20" \
   get agent support -o jsonpath='{.status.sloMessage}'
 frozen=$(kubectl -n "$NS" get agent support -o jsonpath='{.status.promotionsFrozen}')
@@ -135,7 +167,7 @@ echo "OK: not frozen on 6/20 samples"
 
 say "Phase B — three more degraded runs: budget exhausted, freeze must trip"
 for i in 2 3 4; do
-  "$ROOT"/slice/continuous-eval.sh "$ROOT"/slice/datasets/sabotaged.yaml "$TARGET"
+  sample "$ROOT"/slice/datasets/sabotaged.yaml "$TARGET"
 done
 wait_for "promotionsFrozen=true" 90 '^true$' \
   get agent support -o jsonpath='{.status.promotionsFrozen}'
@@ -172,7 +204,7 @@ fi
 say "Phase E — steady runs; the freeze lifts as the bad samples age out of the 5m window"
 deadline=$((SECONDS + 600))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  "$ROOT"/slice/continuous-eval.sh "$ROOT"/slice/datasets/steady.yaml "$TARGET"
+  sample "$ROOT"/slice/datasets/steady.yaml "$TARGET"
   frozen=$(kubectl -n "$NS" get agent support -o jsonpath='{.status.promotionsFrozen}')
   [ "$frozen" = "false" ] && break
   sleep 15
