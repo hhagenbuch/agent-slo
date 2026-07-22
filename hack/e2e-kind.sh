@@ -164,6 +164,11 @@ else
     get promptversion support-v3-hotfix -o jsonpath='{.status.phase}'
 fi
 
+# Note on what this phase proves: that recovery HAPPENS via clean runs rolling
+# the window. That it happens through the hysteresis band (holds at 75-100%,
+# lifts only below 75%) is asserted precisely by the operator's unit tests
+# (SloPolicyCheckTest: hold-in-band, lift-below-threshold) — a wall-clock e2e
+# cannot pin the window to an exact consumption value without racing the clock.
 say "Phase E — steady runs; the freeze lifts as the bad samples age out of the 5m window"
 deadline=$((SECONDS + 600))
 while [ "$SECONDS" -lt "$deadline" ]; do

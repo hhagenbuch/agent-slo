@@ -4,10 +4,15 @@
 #   2. append {"ts","passed","total"} to the samples ConfigMap the operator reads
 #   3. push the run through agent-meter's SLI instruments (OTLP)
 #
+# Single-runner by design: the ConfigMap append is read-modify-write with no
+# concurrency control, so overlapping runners would lose samples. One scheduled
+# runner per Agent is the slice's contract; the RFC §4 Prometheus path has no
+# such race and is the roadmap for anything fancier.
+#
 # Usage: slice/continuous-eval.sh <dataset.yaml> <target-url|echo>
 # Env:   EVALS_JAR (required)  METRICS_JAR (optional; skips metric push if unset)
 #        NS=agents  SAMPLES_CM=support-slo-samples  AGENT_NAME=support
-#        OTLP_ENDPOINT=http://localhost:4317
+#        OTLP_ENDPOINT=http://localhost:4317  PRUNE_BEFORE_S=2419200 (28d)
 set -euo pipefail
 
 DATASET=${1:?dataset yaml}
@@ -33,7 +38,14 @@ total=$(printf '%s' "$verdict" | jq .total)
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 sample="{\"ts\":\"$ts\",\"passed\":$passed,\"total\":$total}"
 existing=$(kubectl -n "$NS" get configmap "$CM" -o jsonpath='{.data.samples\.jsonl}' 2>/dev/null || true)
-{ [ -n "$existing" ] && printf '%s\n' "$existing"; printf '%s\n' "$sample"; } > "$work/samples.jsonl"
+# Prune samples older than PRUNE_BEFORE_S (default 28d, 4x the RFC's 7d window)
+# so the ConfigMap cannot grow toward its 1MiB limit. The operator ignores
+# out-of-window samples anyway, so pruning changes no freeze decision.
+cutoff=$(date -u -v-"${PRUNE_BEFORE_S:-2419200}"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || date -u -d "@$(( $(date +%s) - ${PRUNE_BEFORE_S:-2419200} ))" +%Y-%m-%dT%H:%M:%SZ)
+{ [ -n "$existing" ] && printf '%s\n' "$existing" \
+    | jq -c --arg cutoff "$cutoff" 'select(.ts >= $cutoff)' 2>/dev/null;
+  printf '%s\n' "$sample"; } > "$work/samples.jsonl"
 kubectl -n "$NS" create configmap "$CM" --from-file=samples.jsonl="$work/samples.jsonl" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 echo "sample recorded: $sample (dataset $(basename "$DATASET"))"

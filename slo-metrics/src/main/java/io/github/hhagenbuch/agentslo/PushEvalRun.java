@@ -52,8 +52,11 @@ public final class PushEvalRun {
         SdkMeterProvider provider = SdkMeterProvider.builder()
                 .setResource(Resource.getDefault().merge(Resource.create(
                         Attributes.of(AttributeKey.stringKey("service.name"), "agent-slo-runner"))))
+                // The reader exists only because the SDK requires one to bind an
+                // exporter; this process lives ~2s, so the interval never fires —
+                // forceFlush() below is the actual send.
                 .registerMetricReader(PeriodicMetricReader.builder(exporter)
-                        .setInterval(Duration.ofSeconds(60))
+                        .setInterval(Duration.ofDays(1))
                         .build())
                 .build();
         try {
