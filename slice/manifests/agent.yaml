@@ -1,0 +1,27 @@
+# The slice's Agent: the operator's standard support agent plus an sloPolicy.
+# The window/minSamples here are e2e-scaled (minutes, not the RFC's 7d) so the
+# freeze → recovery loop is demonstrable in one sitting; the arithmetic is
+# identical at any scale.
+apiVersion: agents.hhagenbuch.io/v1alpha1
+kind: Agent
+metadata:
+  name: support
+  namespace: agents
+spec:
+  image: ghcr.io/hhagenbuch/spring-ai-agent-starter:0.3.0
+  replicas: 1
+  model: claude-sonnet-5
+  apiKeySecretRef:
+    name: anthropic-key
+    key: api-key
+  activePromptVersion: support-v1
+  systemPrompt: |
+    You are a concise, friendly support agent. Use your tools for anything
+    factual; never guess order numbers or prices.
+  evalGate:
+    datasetConfigMap: support-golden-cases
+    minPassRate: "0.9"
+  sloPolicy:
+    target: "0.95"      # continuous-eval pass-rate SLO (RFC §2.1)
+    window: "5m"        # e2e-scaled; production would say 7d
+    minSamples: 20      # §3.3 minimum-evidence rule, e2e-scaled

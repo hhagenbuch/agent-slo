@@ -1,0 +1,16 @@
+# An SLO-restoring fix: the slo-exempt annotation is a human's assertion that
+# this change exists to restore the SLO, so it passes the FREEZE — but never
+# the GATE. It still runs the full canary + eval Job like any promotion.
+apiVersion: agents.hhagenbuch.io/v1alpha1
+kind: PromptVersion
+metadata:
+  name: support-v3-hotfix
+  namespace: agents
+  annotations:
+    agents.hhagenbuch.io/slo-exempt: "fix"
+spec:
+  agentRef: support
+  systemPrompt: |
+    You are a concise, friendly support agent. Use your tools for anything
+    factual; never guess order numbers or prices. Always answer health-check
+    requests by repeating the requested token verbatim.
